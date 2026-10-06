@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>DOUS Deckhand v{{ version }}</title>
+<link rel="icon" href="/static/favicon.ico">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <img class="logo" src="/static/deepocean-logo-white.png" alt="DeepOcean">
+  <h1>DOUS Deckhand</h1>
+  <div class="hitch-switcher">
+    <select id="hitchSelect"></select>
+    <button type="button" id="newHitchBtn">+ New Hitch</button>
+  </div>
+  <nav>
+    <button class="tab-btn active" data-tab="today">Today</button>
+    <button class="tab-btn" data-tab="timesheets">Timesheets</button>
+    <button class="tab-btn" data-tab="setup">Hitch Setup</button>
+    <button class="tab-btn" data-tab="signatures">Signatures</button>
+    <button class="tab-btn" data-tab="history">History</button>
+  </nav></header>
+
+<div id="updateBanner" class="update-banner" hidden></div>
+
+<main>
+
+<section id="tab-today" class="tab active">
+  <div class="row">
+    <label>Date
+      <input type="date" id="dateInput">
+    </label>
+    <button id="addTraBtn">+ Add TRA</button>
+    <button id="addTbtBtn">+ Add TBT</button>
+  </div>
+  <div id="traList" class="tra-list"></div>
+</section>
+
+<section id="tab-timesheets" class="tab">
+  <h2>Weekly Timesheets</h2>
+  <p class="hint">Pick the week (it always ends on a Sunday), check each person's days, then generate. Each person confirms their own timesheet before their signature goes on.</p>
+  <div class="row ts-week-row">
+    <button type="button" id="tsPrevWeek" class="secondary" title="Previous week">&#9664;</button>
+    <label>Week ending (Sunday)
+      <input type="date" id="tsWeekInput">
+    </label>
+    <button type="button" id="tsNextWeek" class="secondary" title="Next week">&#9654;</button>
+    <span id="tsWeekLabel" class="ts-week-label"></span>
+  </div>
+  <div id="tsOps" class="grid ts-ops"></div>
+  <div id="tsGrid"></div>
+  <div class="row">
+    <button type="button" id="tsGenerateBtn">Generate Timesheets</button>
+    <span class="hint" style="margin:0">Day types: O = Offshore, T = Travel, S = Shop, M = Other (blank = not working)</span>
+  </div>
+</section>
+
+<section id="tab-history" class="tab">
+  <h2>History</h2>
+  <p class="hint">Every day a TRA or TBT has been generated for this hitch. Click a date to open it on the Today tab.</p>
+  <div id="historyList" class="tra-list"></div>
+</section>
+
+<section id="tab-setup" class="tab">
+  <h2>Hitch / Project Setup</h2>
+  <p class="hint">Fill this in once per hitch. Every TRA/TBT generated on the Today tab pulls from here.</p>
+  <form id="hitchForm">
+    <label class="full">Hitch Name (shown in the switcher at the top of the app)
+      <input name="name" placeholder="e.g. PRJ###### - Day Supervisor / Night Supervisor">
+    </label>
+    <div class="grid">
+      <label>Project # <input name="project" placeholder="e.g. PRJ######"></label>
+      <label>Location / Worksite <input name="location" placeholder="e.g. vessel name"></label>
+      <label>Sub Location / Area <input name="sub_location" placeholder="e.g. ROV Deck"></label>
+      <label>Approver (dept) &mdash; also TBT Offshore Manager <input name="approver" placeholder="e.g. OCM"></label>
+      <label>Responsible Person <input name="responsible_person" placeholder="e.g. SHIFT SUPERVISOR"></label>
+      <label>Equipment &mdash; also the timesheet's System <input name="equipment" placeholder="e.g. HD59"></label>
+      <label>Client (timesheets) <input name="client" placeholder="e.g. Shell"></label>
+    </div>
+    <label class="full">Output folder &mdash; the project's HSE folder
+      <span class="input-with-btn">
+        <input name="output_folder" id="outputFolderInput" placeholder="e.g. ...\PRJ######\HSE">
+        <button type="button" id="browseFolderBtn" class="secondary">Browse&hellip;</button>
+      </span>
+      <span class="hint" style="margin-top:2px">Signed TRAs are saved in <b>01 SIGNED TRA's</b> and TBTs in <b>02 SIGNED TBT's</b> inside this folder, each sorted into month folders (01 January, 02 February&hellip;). These folders are created automatically if they don't exist.</span>
+    </label>
+
+    <label class="full">Timesheet output folder &mdash; select the project's <b>7 - TIMESHEETS &amp; MILEAGE REPORT</b> folder
+      <span class="input-with-btn">
+        <input name="ts_output_folder" id="tsFolderInput" placeholder="e.g. ...\PRJ######\7 - TIMESHEETS &amp; MILEAGE REPORT">
+        <button type="button" id="browseTsFolderBtn" class="secondary">Browse&hellip;</button>
+      </span>
+      <span class="hint" style="margin-top:2px">Timesheets are saved in <b>1 - DOUS PERSONNEL</b> (or <b>2 - CONTRACTOR TIMESHEETS</b>) &gt; the person's name &gt; the year, e.g. <i>1 - DOUS PERSONNEL\John Smith\2026</i>. Missing folders are created automatically.</span>
+    </label>
+
+    <h3>Crew Roster</h3>
+    <p class="hint">The Day Shift Supervisor is the TRA/TBT approver, and the Night Shift Supervisor is the 2nd approver &mdash; their names and positions are taken from here. <b>Position</b> is the short form used on TRAs/TBTs; <b>Official Position</b> is used on timesheets. Day-shift crew get the Day Shift Supervisor's signature on their timesheet, night-shift crew the Night Shift Supervisor's.</p>
+    <table id="crewTable">
+      <thead><tr><th>Name</th><th>Position</th><th>Official Position (timesheets)</th><th>Shift</th><th>Contractor</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <button type="button" id="addCrewRow">+ Add crew member</button>
+
+    <div class="row">
+      <button type="submit">Save Hitch Setup</button>
+      <span id="hitchSaveStatus"></span>
+    </div>
+  </form>
+
+  <h3>Saved Hitches</h3>
+  <p class="hint">Remove old hitches you no longer need. This only takes them out of the app &mdash; PDFs already saved to their output folders are never touched.</p>
+  <div id="hitchManageList" class="hitch-manage-list"></div>
+</section>
+
+<section id="tab-signatures" class="tab">
+  <h2>Signature Library</h2>
+  <p class="hint">Captured once, reused automatically on every TRA/TBT that lists this person &mdash; until you clear and re-capture it.</p>
+  <div id="sigList" class="sig-list"></div>
+</section>
+
+</main>
+
+<footer>DOUS Deckhand &middot; daily TRAs, TBTs &amp; timesheets &middot; v{{ version }}</footer>
+
+<div id="modalBackdrop" class="modal-backdrop" hidden>
+  <div id="modalBox" class="modal-box"></div>
+</div>
+
+<script src="/static/topaz.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

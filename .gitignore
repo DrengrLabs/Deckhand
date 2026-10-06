@@ -1,0 +1,21 @@
+# Saved data on any computer: hitches, crew, signatures, History, timesheets
+app/app_data/*
+!app/app_data/template_baselines.json
+
+# The read-only update key -- added to release builds only, never committed
+app/update_config.json
+update-token.txt
+
+# One-time installers (large binaries) -- in each release's full zip instead
+app/installers/python-*.exe
+app/installers/sigweb.exe
+app/installers/wheels/
+
+# Runtime / build leftovers
+__pycache__/
+*.pyc
+*.log
+*.log.old
+*.updating
+install_error_log.txt
+dist/
