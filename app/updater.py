@@ -19,6 +19,8 @@ import io
 import json
 import os
 import shutil
+import ssl
+import sys
 import threading
 import time
 import urllib.error
@@ -61,21 +63,39 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+def _ssl_context():
+    """Trust what Windows trusts. Company networks that inspect HTTPS
+    re-sign traffic with their own root certificate, which Windows (and
+    Edge/Chrome) accept but Python's own certificate list doesn't --
+    "CERTIFICATE_VERIFY_FAILED: unable to get local issuer certificate".
+    truststore (bundled in app\\vendor) checks certificates the way Windows
+    does; plain Python checking is the fallback."""
+    vendor = os.path.join(APP_DIR, "vendor")
+    if vendor not in sys.path:
+        sys.path.insert(0, vendor)
+    try:
+        import truststore
+        return truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    except Exception:
+        return ssl.create_default_context()
+
+
 def _get(url, token, accept="application/vnd.github+json", timeout=20):
     """GET from the GitHub API. Asset downloads redirect to a storage URL
     that must be fetched WITHOUT the GitHub key, so redirects are followed
     by hand."""
+    ctx = _ssl_context()
     req = urllib.request.Request(url, headers={
         "Authorization": f"Bearer {token}", "Accept": accept,
         "User-Agent": "DOUS-Deckhand", "X-GitHub-Api-Version": "2022-11-28"})
-    opener = urllib.request.build_opener(_NoRedirect)
+    opener = urllib.request.build_opener(_NoRedirect, urllib.request.HTTPSHandler(context=ctx))
     try:
         with opener.open(req, timeout=timeout) as resp:
             return resp.read(), dict(resp.headers)
     except urllib.error.HTTPError as e:
         if e.code in (301, 302, 303, 307, 308) and e.headers.get("Location"):
             plain = urllib.request.Request(e.headers["Location"], headers={"User-Agent": "DOUS-Deckhand"})
-            with urllib.request.urlopen(plain, timeout=max(timeout, 300)) as resp:
+            with urllib.request.urlopen(plain, timeout=max(timeout, 300), context=ctx) as resp:
                 return resp.read(), dict(resp.headers)
         raise
 
