@@ -15,7 +15,7 @@ the PDFs into the project's HSE and timesheet folders.
 ```
 INSTALL - run once.bat / UPDATE - keep existing data.bat / UNINSTALL.bat
 README.txt                     crew guide
-templates/TRA, TBT, TS         blank official forms (read-only)
+templates/TRA, TBT, TS, EVAL   blank official forms (read-only)
 app/                           the program (Python + Flask, runs locally)
   installers/                  one-time installers (Python, SigWeb, packages) -
                                kept out of git, included in release zips

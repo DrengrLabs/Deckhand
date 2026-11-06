@@ -17,6 +17,7 @@
   <nav>
     <button class="tab-btn active" data-tab="today">Today</button>
     <button class="tab-btn" data-tab="timesheets">Timesheets</button>
+    <button class="tab-btn" data-tab="appraisals">Appraisals</button>
     <button class="tab-btn" data-tab="setup">Hitch Setup</button>
     <button class="tab-btn" data-tab="signatures">Signatures</button>
     <button class="tab-btn" data-tab="history">History</button>
@@ -62,6 +63,18 @@
   <div id="historyList" class="tra-list"></div>
 </section>
 
+<section id="tab-appraisals" class="tab">
+  <h2>Performance Appraisals</h2>
+  <p class="hint">Confidential. Fill in the appraisal with the employee, then both sign. The signed PDF is saved with that person's timesheets (named like <i>Eval_JS_AB_05-Nov-26.pdf</i>) and is the only record &mdash; nothing stays in Deckhand once it's saved. An unfinished appraisal is kept as a draft until it's saved or discarded.</p>
+  <div class="row ap-pick-row">
+    <label>Employee
+      <select id="apEmployee"></select>
+    </label>
+    <span id="apDraftStatus" class="hint" style="margin:0"></span>
+  </div>
+  <div id="apForm"></div>
+</section>
+
 <section id="tab-setup" class="tab">
   <h2>Hitch / Project Setup</h2>
   <p class="hint">Fill this in once per hitch. Every TRA/TBT generated on the Today tab pulls from here.</p>
@@ -83,7 +96,7 @@
         <input name="output_folder" id="outputFolderInput" placeholder="e.g. ...\PRJ######\HSE">
         <button type="button" id="browseFolderBtn" class="secondary">Browse&hellip;</button>
       </span>
-      <span class="hint" style="margin-top:2px">Signed TRAs are saved in <b>01 SIGNED TRA's</b> and TBTs in <b>02 SIGNED TBT's</b> inside this folder, each sorted into month folders (01 January, 02 February&hellip;). These folders are created automatically if they don't exist.</span>
+      <span class="hint" style="margin-top:2px">Signed TRAs are saved in <b>01 SIGNED TRA's</b> and TBTs in <b>02 SIGNED TBT's</b> inside this folder, each sorted into year then month folders (e.g. <i>01 SIGNED TRA's\2026\11 November</i>). These folders are created automatically if they don't exist.</span>
     </label>
 
     <label class="full">Timesheet output folder &mdash; select the project's <b>7 - TIMESHEETS &amp; MILEAGE REPORT</b> folder
@@ -121,7 +134,7 @@
 
 </main>
 
-<footer>DOUS Deckhand &middot; daily TRAs, TBTs &amp; timesheets &middot; v{{ version }}</footer>
+<footer>DOUS Deckhand &middot; daily TRAs, TBTs, timesheets &amp; appraisals &middot; v{{ version }}</footer>
 
 <div id="modalBackdrop" class="modal-backdrop" hidden>
   <div id="modalBox" class="modal-box"></div>

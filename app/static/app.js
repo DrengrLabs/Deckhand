@@ -94,6 +94,7 @@ $$(".tab-btn").forEach((btn) => {
     if (btn.dataset.tab === "signatures") loadSignatures();
     if (btn.dataset.tab === "history") loadHistory();
     if (btn.dataset.tab === "timesheets") loadTimesheets();
+    if (btn.dataset.tab === "appraisals") loadAppraisals();
   });
 });
 
@@ -302,6 +303,7 @@ async function reloadAllForActiveHitch() {
   await loadTraList();
   if ($("#tab-history").classList.contains("active")) await loadHistory();
   if ($("#tab-signatures").classList.contains("active")) await loadSignatures();
+  if ($("#tab-appraisals").classList.contains("active")) { apData = null; $("#apForm").innerHTML = ""; await loadAppraisals(); }
 }
 
 $("#addCrewRow").addEventListener("click", () => addCrewRow());
@@ -1034,6 +1036,355 @@ $("#tsGenerateBtn").addEventListener("click", async () => {
   $("#tsDoneClose").addEventListener("click", hideModal);
   await loadTimesheets(tsWeek);
 });
+
+// ---------- performance appraisals ----------
+// Confidential: the form is kept as a server-side draft only while it's
+// being filled in; once both have signed, the PDF is the only record.
+let apMeta = null;      // form definition + this hitch's crew
+let apData = null;      // the appraisal being filled in
+let apSaveTimer = null;
+
+function apBlank(person) {
+  // Every subject starts at 5 - Meets Expectations (Leadership at N for
+  // Pilot Techs); the appraiser changes only what's different.
+  const scores = {};
+  [...apMeta.sections.flatMap(([, list]) => list), apMeta.overall].forEach((s) => { scores[s] = apMeta.standard_score; });
+  (apMeta.default_not_applicable[person.grade] || []).forEach((s) => { scores[s] = "N"; });
+  return {
+    employee_name: person.name, employee_title: person.official_position,
+    // The last appraiser and day count used on this hitch (the same person
+    // usually does every appraisal), unless that's who is being appraised.
+    ...(apMeta.defaults.appraiser_name && apMeta.defaults.appraiser_name !== person.name
+      ? { appraiser_name: apMeta.defaults.appraiser_name, appraiser_title: apMeta.defaults.appraiser_title || "" }
+      : { appraiser_name: "", appraiser_title: "" }),
+    days: apMeta.defaults.days || "", date: todayStr(),
+    vessel: apMeta.defaults.vessel || "", location: apMeta.defaults.location || "",
+    scores, strengths: ["", "", ""], development: ["", "", ""], action_plan: ["", "", ""],
+    actions: [], career: "", appraiser_comments: "", employee_comments: "",
+  };
+}
+
+async function loadAppraisals() {
+  apMeta = await api("/api/appraisals");
+  const sel = $("#apEmployee");
+  const current = apData ? apData.employee_name : "";
+  const opts = apMeta.people.map((p) => {
+    const note = !p.eligible
+      ? (p.grade ? ` (${p.grade} - not on this form)` : " (no official position set)")
+      : (p.has_draft ? " (draft in progress)" : "");
+    return `<option value="${escapeAttr(p.name)}"${p.eligible ? "" : " disabled"}>${escapeAttr(p.name)}${escapeAttr(note)}</option>`;
+  });
+  sel.innerHTML = `<option value="">Choose who is being appraised&hellip;</option>${opts.join("")}`;
+  if (!apMeta.people.length) {
+    $("#apForm").innerHTML = '<p class="hint">No crew on this hitch yet &mdash; add them on Hitch Setup.</p>';
+    apData = null;
+    return;
+  }
+  const still = apMeta.people.find((p) => p.name === current && p.eligible);
+  sel.value = still ? current : "";
+  if (!still) { apData = null; $("#apForm").innerHTML = ""; $("#apDraftStatus").textContent = ""; }
+}
+
+$("#apEmployee").addEventListener("change", async (e) => {
+  const person = apMeta.people.find((p) => p.name === e.target.value);
+  if (!person) { apData = null; $("#apForm").innerHTML = ""; $("#apDraftStatus").textContent = ""; return; }
+  const res = await api(`/api/appraisals/draft?name=${encodeURIComponent(person.name)}`);
+  apData = res.draft || apBlank(person);
+  $("#apDraftStatus").textContent = res.draft ? "Draft loaded." : "";
+  renderAppraisal();
+});
+
+function apQueueSave() {
+  if (!apData) return;
+  clearTimeout(apSaveTimer);
+  $("#apDraftStatus").textContent = "Saving draft…";
+  apSaveTimer = setTimeout(async () => {
+    try {
+      await api("/api/appraisals/draft", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(apData),
+      });
+      const t = new Date();
+      $("#apDraftStatus").textContent = `Draft saved ${String(t.getHours()).padStart(2, "0")}:${String(t.getMinutes()).padStart(2, "0")}`;
+    } catch (e) {
+      $("#apDraftStatus").textContent = "Couldn't save the draft: " + e.message;
+    }
+  }, 700);
+}
+
+function apScoreTable(title, subjects, isOverall) {
+  const head = apMeta.scores.map((s) => `<th class="ap-score" title="${escapeAttr(apMeta.score_names[s])}">${s}</th>`).join("");
+  const rows = subjects.map((subj) => {
+    const def = apMeta.definitions[subj];
+    const cells = apMeta.scores.map((s) => {
+      const on = apData.scores[subj] === s;
+      const flag = on && apMeta.needs_examples.includes(s) ? " ap-flag" : "";
+      return `<td class="ap-score${flag}"><input type="radio" name="sc_${escapeAttr(subj)}" data-subject="${escapeAttr(subj)}" value="${s}"${on ? " checked" : ""} title="${escapeAttr(`${s} - ${apMeta.score_names[s]}`)}"></td>`;
+    }).join("");
+    const missing = apData.scores[subj] ? "" : " ap-missing";
+    return `<tr><td class="ap-subject${missing}"${def ? ` title="${escapeAttr(def)}"` : ""}>${escapeAttr(subj)}${def ? ' <span class="ap-info">ⓘ</span>' : ""}</td>${cells}</tr>`;
+  }).join("");
+  return `<h3 class="ap-section">${escapeAttr(title)}</h3>
+    <div class="table-scroll"><table class="ap-table"><thead><tr><th>${isOverall ? "Overall" : "Subject"}</th>${head}</tr></thead>
+    <tbody>${rows}</tbody></table></div>`;
+}
+
+function apLines(key, label) {
+  return `<h4>${label}</h4>${[0, 1, 2].map((i) =>
+    `<div class="ap-line">${i + 1}. <input data-line="${key}" data-i="${i}" value="${escapeAttr(apData[key][i] || "")}" placeholder="Pick from the list or type your own">
+      <button type="button" class="secondary ap-pick" data-key="${key}" data-i="${i}" title="Choose from the list">&#9662;</button></div>`).join("")}`;
+}
+
+// ---- pick-or-type menu for the section 6 lines ----
+function apCloseMenu() {
+  const m = $("#apMenu");
+  if (m) m.remove();
+  document.removeEventListener("mousedown", apMenuOutside, true);
+  document.removeEventListener("keydown", apMenuKey, true);
+}
+function apMenuOutside(e) { if (!e.target.closest("#apMenu") && !e.target.closest(".ap-pick")) apCloseMenu(); }
+function apMenuKey(e) { if (e.key === "Escape") apCloseMenu(); }
+
+function apSetLine(key, i, text) {
+  apData[key][i] = text;
+  $(`#apForm input[data-line="${key}"][data-i="${i}"]`).value = text;
+  apQueueSave();
+}
+
+async function apPhraseApi(method, key, text) {
+  const res = await api("/api/appraisals/phrases", {
+    method, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key, text }),
+  });
+  apMeta.phrases = res.phrases;
+}
+
+function apOpenMenu(btn, toggle = true) {
+  const key = btn.dataset.key, i = Number(btn.dataset.i);
+  const id = `${key}:${i}`;
+  const wasOpen = $("#apMenu") && $("#apMenu").dataset.for === id;
+  apCloseMenu();
+  if (wasOpen && toggle) return;
+  const cur = $(`#apForm input[data-line="${key}"][data-i="${i}"]`).value.trim();
+  const items = apMeta.phrases[key] || [];
+  const known = items.some((p) => p.text.toLowerCase() === cur.toLowerCase());
+  const used = apData[key].map((t) => (t || "").toLowerCase());
+  const menu = document.createElement("div");
+  menu.id = "apMenu";
+  menu.className = "ap-menu";
+  menu.dataset.for = id;
+  menu.innerHTML = `
+    ${items.map((p, n) => `<div class="ap-menu-item${used.includes(p.text.toLowerCase()) ? " used" : ""}" data-n="${n}">
+      <span>${escapeAttr(p.text)}</span>${p.custom ? `<button type="button" class="ap-menu-del" data-n="${n}" title="Remove from your list">&times;</button>` : ""}</div>`).join("")}
+    ${cur && !known
+      ? `<div class="ap-menu-add">+ Save &ldquo;${escapeAttr(cur)}&rdquo; to this list</div>`
+      : '<div class="ap-menu-hint">Type your own in the box &mdash; then open this list to save it for next time.</div>'}
+    ${cur ? '<div class="ap-menu-clear">Clear this line</div>' : ""}`;
+  btn.closest(".ap-line").appendChild(menu);
+  $$(".ap-menu-item", menu).forEach((el) => el.addEventListener("click", (e) => {
+    if (e.target.closest(".ap-menu-del")) return;
+    apSetLine(key, i, items[Number(el.dataset.n)].text);
+    apCloseMenu();
+  }));
+  $$(".ap-menu-del", menu).forEach((b) => b.addEventListener("click", async () => {
+    await apPhraseApi("DELETE", key, items[Number(b.dataset.n)].text);
+    apOpenMenu(btn, false);
+  }));
+  const add = $(".ap-menu-add", menu);
+  if (add) add.addEventListener("click", async () => {
+    try { await apPhraseApi("POST", key, cur); } catch (e) { alert(e.message); return; }
+    apOpenMenu(btn, false);
+  });
+  const clear = $(".ap-menu-clear", menu);
+  if (clear) clear.addEventListener("click", () => { apSetLine(key, i, ""); apCloseMenu(); });
+  document.addEventListener("mousedown", apMenuOutside, true);
+  document.addEventListener("keydown", apMenuKey, true);
+}
+
+
+function renderAppraisal() {
+  const d = apData;
+  const person = apMeta.people.find((p) => p.name === d.employee_name) || {};
+  const crewOptions = apMeta.people.filter((p) => p.name !== d.employee_name)
+    .map((p) => `<option value="${escapeAttr(p.name)}">`).join("");
+  const by = apMeta.appraised_by[person.grade];
+  const legend = apMeta.scores.map((s) =>
+    `<tr><td class="ap-score"><b>${s}</b></td><td><b>${escapeAttr(apMeta.score_names[s])}</b> &ndash; ${escapeAttr(apMeta.score_standard[s])}</td></tr>`).join("");
+  $("#apForm").innerHTML = `
+    ${by ? `<p class="hint">${escapeAttr(person.grade)}s are appraised by ${escapeAttr(by)}.${person.grade === "PTI" || person.grade === "PTII" ? " Leadership starts at N &mdash; the form says Pilot Techs aren't appraised on it." : ""}</p>` : ""}
+    <div class="grid ap-head">
+      <label>Job Title <input data-field="employee_title" value="${escapeAttr(d.employee_title)}"></label>
+      <label>Date of Appraisal <input type="date" data-field="date" value="${escapeAttr(d.date)}"></label>
+      <label>Appraiser Name <input data-field="appraiser_name" list="apCrewList" value="${escapeAttr(d.appraiser_name)}" placeholder="e.g. day shift supervisor"></label>
+      <label>Appraiser Job Title <input data-field="appraiser_title" value="${escapeAttr(d.appraiser_title)}" placeholder="e.g. ROV Supervisor"></label>
+      <label>No. of days for this Appraisal <input type="number" min="1" data-field="days" value="${escapeAttr(d.days)}" placeholder="e.g. 28"></label>
+      <label>Vessel <input data-field="vessel" value="${escapeAttr(d.vessel)}"></label>
+      <label>Location <input data-field="location" value="${escapeAttr(d.location)}" placeholder="e.g. Gulf of Mexico"></label>
+    </div>
+    <datalist id="apCrewList">${crewOptions}</datalist>
+    <details class="ap-legend"><summary>Scoring standard (5 = meets expectations)</summary>
+      <table>${legend}</table>
+      <p class="hint" style="margin-top:6px">Scores of 1, 2, 6 or 7 need supporting examples or documents. A 3 or 4 is expected for a new hire or someone recently promoted.</p>
+    </details>
+    <p class="hint ap-standard">Every score starts at <b>5 &ndash; Meets Expectations</b> (Overall too) &mdash; change only what's different.</p>
+    ${apMeta.sections.map(([title, subjects]) => apScoreTable(title, subjects, false)).join("")}
+    ${apScoreTable("Section VI - Overall Performance", [apMeta.overall], true)}
+    <div id="apFlagNote"></div>
+    <h3 class="ap-section">6. Employee Development</h3>
+    ${apLines("strengths", "Primary Strengths")}
+    ${apLines("development", "Development Areas")}
+    <h4>Recommended Actions</h4>
+    <div class="ap-checks">${apMeta.actions.map((a) =>
+      `<label class="ap-check"><input type="checkbox" data-action="${escapeAttr(a)}"${d.actions.includes(a) ? " checked" : ""}> ${escapeAttr(a)}</label>`).join("")}</div>
+    ${apLines("action_plan", "Action Plan Before the Next Appraisal")}
+    <h3 class="ap-section">7. Career Progress</h3>
+    <div class="ap-checks">${apMeta.career.map((c) =>
+      `<label class="ap-check"><input type="radio" name="apCareer" value="${escapeAttr(c)}"${d.career === c ? " checked" : ""}> ${escapeAttr(c)}</label>`).join("")}</div>
+    <h3 class="ap-section">Comments</h3>
+    <label class="full">Appraiser Comments <textarea data-field="appraiser_comments" rows="3">${escapeAttr(d.appraiser_comments)}</textarea></label>
+    <p class="hint">Employee comments are added at the end, when the employee reviews and signs.</p>
+    <div class="row">
+      <button type="button" id="apSignBtn">Review, sign &amp; save</button>
+      <button type="button" class="secondary" id="apDiscardBtn">Discard draft</button>
+    </div>`;
+  apFlagNote();
+
+  $$("#apForm [data-field]").forEach((inp) => inp.addEventListener("input", () => {
+    d[inp.dataset.field] = inp.value;
+    if (inp.dataset.field === "appraiser_name") {
+      const m = apMeta.people.find((p) => p.name === inp.value.trim());
+      const title = $('#apForm [data-field="appraiser_title"]');
+      if (m && m.official_position && !title.value) { title.value = m.official_position; d.appraiser_title = m.official_position; }
+    }
+    apQueueSave();
+  }));
+  $$("#apForm input[data-subject]").forEach((r) => r.addEventListener("change", () => {
+    d.scores[r.dataset.subject] = r.value;
+    const row = r.closest("tr");
+    row.querySelector(".ap-subject").classList.remove("ap-missing");
+    $$("td.ap-score", row).forEach((td) => td.classList.remove("ap-flag"));
+    if (apMeta.needs_examples.includes(r.value)) r.closest("td").classList.add("ap-flag");
+    apFlagNote();
+    apQueueSave();
+  }));
+  $$("#apForm input[data-line]").forEach((inp) => inp.addEventListener("input", () => {
+    d[inp.dataset.line][Number(inp.dataset.i)] = inp.value;
+    apQueueSave();
+  }));
+  $$("#apForm .ap-pick").forEach((b) => b.addEventListener("click", () => apOpenMenu(b)));
+  $$("#apForm input[data-action]").forEach((cb) => cb.addEventListener("change", () => {
+    d.actions = $$("#apForm input[data-action]").filter((c) => c.checked).map((c) => c.dataset.action);
+    apQueueSave();
+  }));
+  $$('#apForm input[name="apCareer"]').forEach((r) => r.addEventListener("change", () => {
+    d.career = r.value;
+    apQueueSave();
+  }));
+  $("#apDiscardBtn").addEventListener("click", async () => {
+    if (!confirm(`Discard the appraisal for ${d.employee_name}? Everything entered so far will be deleted.`)) return;
+    clearTimeout(apSaveTimer);
+    await api(`/api/appraisals/draft?name=${encodeURIComponent(d.employee_name)}`, { method: "DELETE" });
+    apData = null;
+    $("#apForm").innerHTML = "";
+    $("#apDraftStatus").textContent = "Draft discarded.";
+    await loadAppraisals();
+  });
+  $("#apSignBtn").addEventListener("click", apSignFlow);
+}
+
+function apFlagNote() {
+  const flagged = Object.entries(apData.scores).filter(([, s]) => apMeta.needs_examples.includes(s)).map(([k, s]) => `${k} (${s})`);
+  $("#apFlagNote").innerHTML = flagged.length
+    ? `<p class="hint warn">Supporting examples or documents are needed for: ${flagged.map(escapeAttr).join(", ")}</p>` : "";
+}
+
+function apCheck(examplesConfirmed) {
+  return api("/api/appraisals/check", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...apData, examples_confirmed: examplesConfirmed }),
+  });
+}
+
+async function apSignFlow() {
+  clearTimeout(apSaveTimer);
+  let examplesConfirmed = false;
+  let plan = await apCheck(false);
+  // Scores of 1/2/6/7: the appraiser confirms supporting examples exist.
+  if (plan.needs_examples.length && plan.problems.length) {
+    const ok = await new Promise((resolve) => {
+      showModal(`
+        <h3>Supporting examples</h3>
+        <p>The form requires supporting examples or documents for scores of 1, 2, 6 or 7:</p>
+        <ul>${plan.needs_examples.map((s) => `<li>${escapeAttr(s)} &ndash; ${escapeAttr(apData.scores[s])}</li>`).join("")}</ul>
+        <label class="ap-check"><input type="checkbox" id="apExOk"> I have supporting examples or documents for these scores</label>
+        <div class="row"><button type="button" id="apExNext" disabled>Continue</button>
+          <button type="button" class="secondary" id="apExBack">Go back</button></div>`);
+      $("#apExOk").addEventListener("change", (e) => { $("#apExNext").disabled = !e.target.checked; });
+      $("#apExNext").addEventListener("click", () => { hideModal(); resolve(true); });
+      $("#apExBack").addEventListener("click", () => { hideModal(); resolve(false); });
+    });
+    if (!ok) return;
+    examplesConfirmed = true;
+    plan = await apCheck(true);
+  }
+  if (plan.problems.length) {
+    const unsigned = [apData.appraiser_name, apData.employee_name]
+      .filter((n) => n && plan.problems.some((p) => p.startsWith(`${n} has no signature`)));
+    showModal(`
+      <h3>Not ready to sign yet</h3>
+      <ul class="ts-result">${plan.problems.map((p) => `<li>${escapeAttr(p)}</li>`).join("")}</ul>
+      <div class="row">${unsigned.map((n, i) => `<button type="button" class="secondary ap-cap" data-i="${i}">Capture ${escapeAttr(n)}'s signature</button>`).join("")}
+        <button type="button" id="apProbClose">Close</button></div>`);
+    $("#apProbClose").addEventListener("click", hideModal);
+    $$(".ap-cap").forEach((b) => b.addEventListener("click", () =>
+      pushModal(() => openSignatureModal(unsigned[Number(b.dataset.i)], () => {}))));
+    return;
+  }
+
+  // The employee reviews, adds their comments, and confirms before both signatures go on.
+  const overall = apData.scores[apMeta.overall];
+  showModal(`
+    <h3>Appraisal &mdash; ${escapeAttr(apData.employee_name)}</h3>
+    <p class="hint">Appraised by ${escapeAttr(apData.appraiser_name)} (${escapeAttr(apData.appraiser_title)}) &middot;
+      ${escapeAttr(shortDate(apData.date))} &middot; ${escapeAttr(apData.days)} days &middot;
+      Overall: <b>${escapeAttr(overall)} &ndash; ${escapeAttr(apMeta.score_names[overall])}</b></p>
+    ${plan.warnings.length ? `<p class="hint warn">${plan.warnings.map(escapeAttr).join("<br>")}</p>` : ""}
+    <label class="full">Employee Comments (optional)
+      <textarea id="apEmpComments" rows="3">${escapeAttr(apData.employee_comments)}</textarea></label>
+    <div class="ts-ack-text"><b>${escapeAttr(apData.employee_name)}, please confirm:</b><br>
+      This appraisal has been reviewed with me. Signing applies my signature and ${escapeAttr(apData.appraiser_name)}'s to the form.</div>
+    <p class="hint">Saves to: ${escapeAttr(plan.path)}</p>
+    <div class="row">
+      <button type="button" id="apAck">Reviewed &mdash; sign &amp; save</button>
+      <button type="button" class="secondary" id="apAckBack">Go back</button>
+    </div>`);
+  $("#apEmpComments").addEventListener("input", (e) => { apData.employee_comments = e.target.value; });
+  $("#apAckBack").addEventListener("click", () => { hideModal(); apQueueSave(); });
+  $("#apAck").addEventListener("click", async () => {
+    $("#apAck").disabled = true;
+    try {
+      const res = await api("/api/appraisals/generate", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...apData, acknowledged: true, examples_confirmed: examplesConfirmed }),
+      });
+      apData = null;
+      $("#apForm").innerHTML = "";
+      $("#apDraftStatus").textContent = "";
+      await loadAppraisals();
+      showModal(`
+        <h3>Appraisal saved</h3>
+        <p class="ts-result">${escapeAttr(res.file)}</p>
+        <p class="hint">Send it to dousevals@deepoceangroup.com. Nothing about this appraisal is kept in Deckhand.</p>
+        <div class="row"><button type="button" id="apView">View</button>
+          <button type="button" class="secondary" id="apDone">Close</button></div>`);
+      $("#apView").addEventListener("click", () => api("/api/appraisals/open", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ file: res.file }),
+      }).catch((e) => alert(e.message)));
+      $("#apDone").addEventListener("click", hideModal);
+    } catch (e) {
+      $("#apAck").disabled = false;
+      alert("Couldn't save the appraisal: " + e.message);
+    }
+  });
+}
 
 // ---------- app updates ----------
 function notesHtml(text) {

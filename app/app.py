@@ -5,6 +5,7 @@ import threading
 
 from flask import Flask, jsonify, request, send_file, render_template
 
+import appraisal
 import data_store
 import pdf_engine
 import timesheet
@@ -219,12 +220,13 @@ MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July",
 
 
 def _out_dir(output_folder, category, date_str):
-    """Folder a document is saved into, by its type and its date's month.
-    Month names are spelled out here (not strftime) so they never depend
-    on the computer's language settings."""
-    month = datetime.datetime.strptime(date_str, "%Y-%m-%d").month
+    """Folder a document is saved into, by its type, then its date's year
+    and month: 01 SIGNED TRA's > 2026 > 11 November. Month names are spelled
+    out here (not strftime) so they never depend on the computer's
+    language settings."""
+    d = datetime.datetime.strptime(date_str, "%Y-%m-%d")
     return os.path.join(output_folder, SIGNED_FOLDERS.get(category, SIGNED_FOLDERS["TRA"]),
-                        f"{month:02d} {MONTH_NAMES[month - 1]}")
+                        str(d.year), f"{d.month:02d} {MONTH_NAMES[d.month - 1]}")
 
 
 def _validate_generate_request(body):
@@ -650,6 +652,226 @@ def api_open_timesheet(week_str):
     if not entry or not os.path.exists(entry["file"]):
         return jsonify({"error": "That timesheet file wasn't found."}), 404
     os.startfile(entry["file"])  # noqa: S606 -- local app opening a file it saved
+    return jsonify({"ok": True})
+
+
+# ---------- Performance appraisals ----------
+# Confidential: nothing is kept in the app once the signed PDF is saved --
+# a draft exists only while an appraisal is being filled in.
+
+def _clean_appraisal(body):
+    """The appraisal fields from a request, trimmed to what the form holds."""
+    def lines(key):
+        vals = [str(v).strip() for v in (body.get(key) or [])][:3]
+        return vals + [""] * (3 - len(vals))
+    scores = {k: v for k, v in (body.get("scores") or {}).items()
+              if k in appraisal.SCORE_ROWS and v in appraisal.SCORES}
+    return {
+        "employee_name": str(body.get("employee_name", "")).strip(),
+        "employee_title": str(body.get("employee_title", "")).strip(),
+        "appraiser_name": str(body.get("appraiser_name", "")).strip(),
+        "appraiser_title": str(body.get("appraiser_title", "")).strip(),
+        "days": str(body.get("days", "")).strip(),
+        "date": str(body.get("date", "")).strip(),
+        "vessel": str(body.get("vessel", "")).strip(),
+        "location": str(body.get("location", "")).strip(),
+        "scores": scores,
+        "strengths": lines("strengths"), "development": lines("development"), "action_plan": lines("action_plan"),
+        "actions": [a for a in (body.get("actions") or []) if a in appraisal.RECOMMENDED_ACTIONS],
+        "career": body.get("career") if body.get("career") in appraisal.CAREER_PROGRESS else "",
+        "appraiser_comments": str(body.get("appraiser_comments", "")).strip(),
+        "employee_comments": str(body.get("employee_comments", "")).strip(),
+    }
+
+
+def _appraisal_plan(hitch, data, examples_confirmed=False):
+    """Everything that must be right before anyone signs -- shared by the
+    pre-check and the real save so they can't disagree."""
+    problems, warnings = [], []
+    member = _crew_member(hitch, data["employee_name"])
+    grade = appraisal.grade_for(member.get("official_position")) if member else ""
+    if not member:
+        problems.append("Choose the employee from this hitch's crew roster.")
+    elif grade not in appraisal.FORM_GRADES:
+        problems.append(f"{data['employee_name']} is {member.get('official_position') or 'missing an official position'}"
+                        " - this form covers Supervisors, Senior Pilot Techs and Pilot Techs. OCMs and NOCMs are"
+                        " appraised by the Operations Manager.")
+    if not data["appraiser_name"]:
+        problems.append("Enter the appraiser's name.")
+    elif data["appraiser_name"] == data["employee_name"]:
+        problems.append("The appraiser can't appraise themselves.")
+    if not data["appraiser_title"]:
+        problems.append("Enter the appraiser's job title.")
+    try:
+        date = appraisal.parse_date(data["date"])
+    except ValueError:
+        date = None
+        problems.append("Enter the date of the appraisal.")
+    if not data["days"].isdigit() or int(data["days"]) < 1:
+        problems.append("Enter the number of days this appraisal covers.")
+    missing = appraisal.missing_scores(data["scores"])
+    if missing:
+        problems.append(f"Score every subject (use N if not observed). Missing: {', '.join(missing)}.")
+    flagged = appraisal.needs_examples(data["scores"])
+    if flagged and not examples_confirmed:
+        problems.append("Scores of 1, 2, 6 or 7 need supporting examples or documents - confirm you have them.")
+
+    # Section 3: who appraises each grade. A different appraiser is allowed
+    # (rotations need flexibility) but flagged.
+    appraiser = _crew_member(hitch, data["appraiser_name"])
+    appraiser_grade = appraisal.grade_for(appraiser.get("official_position")) if appraiser else ""
+    if not appraiser_grade:
+        appraiser_grade = appraisal.grade_for(data["appraiser_title"])
+    if grade in appraisal.APPRAISED_BY and appraiser_grade and appraiser_grade not in appraisal.APPRAISED_BY[grade]:
+        warnings.append(f"The form says {grade}s are appraised by {appraisal.APPRAISED_BY_TEXT[grade]}.")
+
+    for who in (data["appraiser_name"], data["employee_name"]):
+        if who and not data_store.get_signature_path(who):
+            problems.append(f"{who} has no signature saved yet - capture it on the Signatures tab first.")
+
+    folder = (hitch.get("ts_output_folder") or "").strip()
+    folder = os.path.normpath(folder) if folder else ""
+    path = ""
+    if not folder:
+        problems.append("No timesheet output folder is set. Appraisals are saved with the timesheets - on"
+                        " Hitch Setup, choose the project's \"7 - TIMESHEETS & MILEAGE REPORT\" folder.")
+    elif not os.path.isdir(folder):
+        problems.append(f"The timesheet output folder can't be reached: {folder}")
+    elif member and date and data["appraiser_name"]:
+        out_dir = timesheet.output_dir(folder, member["name"], bool(member.get("contractor")), date)
+        path = appraisal.available_path(
+            os.path.join(out_dir, appraisal.file_name(member["name"], data["appraiser_name"], date)))
+    return {"problems": problems, "warnings": warnings, "path": path, "date": date,
+            "needs_examples": flagged, "grade": grade}
+
+
+@app.route("/api/appraisals", methods=["GET"])
+def api_appraisals():
+    hitch = data_store.get_hitch()
+    drafts = set(data_store.list_appraisal_drafts())
+    sigs = data_store.get_signatures_index()
+    people = []
+    for m in hitch.get("crew", []):
+        if not m.get("name"):
+            continue
+        grade = appraisal.grade_for(m.get("official_position"))
+        people.append({"name": m["name"], "official_position": m.get("official_position", ""), "grade": grade,
+                       "eligible": grade in appraisal.FORM_GRADES, "contractor": bool(m.get("contractor")),
+                       "has_signature": m["name"] in sigs, "has_draft": m["name"] in drafts})
+    defaults = data_store.get_appraisal_defaults()
+    return jsonify({
+        "people": people,
+        "defaults": {"vessel": hitch.get("location", ""), "location": defaults.get("location", ""),
+                     "appraiser_name": defaults.get("appraiser_name", ""),
+                     "appraiser_title": defaults.get("appraiser_title", ""), "days": defaults.get("days", "")},
+        "phrases": _appraisal_phrases(),
+        "standard_score": appraisal.STANDARD_SCORE,
+        "sections": appraisal.SECTIONS, "overall": appraisal.OVERALL,
+        "scores": appraisal.SCORES, "score_names": appraisal.SCORE_NAMES,
+        "score_standard": appraisal.SCORE_STANDARD, "needs_examples": list(appraisal.NEEDS_EXAMPLES),
+        "definitions": appraisal.DEFINITIONS, "actions": appraisal.RECOMMENDED_ACTIONS,
+        "career": appraisal.CAREER_PROGRESS, "appraised_by": appraisal.APPRAISED_BY_TEXT,
+        "default_not_applicable": appraisal.DEFAULT_NOT_APPLICABLE,
+    })
+
+
+def _appraisal_phrases():
+    """Suggestions for each section 6 line: the built-in ones, then the
+    appraiser's own saved ones (marked custom so they can be removed)."""
+    own = data_store.get_appraisal_phrases()
+    out = {}
+    for key, builtin in appraisal.PHRASES.items():
+        items = [{"text": t, "custom": False} for t in builtin]
+        seen = {t.lower() for t in builtin}
+        for t in own.get(key, []):
+            if t.lower() not in seen:
+                items.append({"text": t, "custom": True})
+                seen.add(t.lower())
+        out[key] = items
+    return out
+
+
+@app.route("/api/appraisals/phrases", methods=["POST", "DELETE"])
+def api_appraisal_phrases():
+    body = request.get_json(force=True)
+    key, text = body.get("key"), " ".join(str(body.get("text", "")).split())
+    if key not in appraisal.PHRASES or not text:
+        return jsonify({"error": "Nothing to save."}), 400
+    if len(text) > 120:
+        return jsonify({"error": "Keep it to one line (120 characters or less)."}), 400
+    own = data_store.get_appraisal_phrases()
+    items = [t for t in own.get(key, []) if t.lower() != text.lower()]
+    if request.method == "POST" and text.lower() not in {t.lower() for t in appraisal.PHRASES[key]}:
+        items.append(text)
+    own[key] = items
+    data_store.save_appraisal_phrases(own)
+    return jsonify({"phrases": _appraisal_phrases()})
+
+
+@app.route("/api/appraisals/draft", methods=["GET"])
+def api_get_appraisal_draft():
+    return jsonify({"draft": data_store.get_appraisal_draft(request.args.get("name", ""))})
+
+
+@app.route("/api/appraisals/draft", methods=["POST"])
+def api_save_appraisal_draft():
+    data = _clean_appraisal(request.get_json(force=True))
+    if not _crew_member(data_store.get_hitch(), data["employee_name"]):
+        return jsonify({"error": "That person isn't on this hitch's crew roster."}), 400
+    data_store.save_appraisal_draft(data["employee_name"], data)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/appraisals/draft", methods=["DELETE"])
+def api_delete_appraisal_draft():
+    data_store.delete_appraisal_draft(request.args.get("name", ""))
+    return jsonify({"ok": True})
+
+
+@app.route("/api/appraisals/check", methods=["POST"])
+def api_check_appraisal():
+    body = request.get_json(force=True)
+    plan = _appraisal_plan(data_store.get_hitch(), _clean_appraisal(body), bool(body.get("examples_confirmed")))
+    return jsonify({k: plan[k] for k in ("problems", "warnings", "path", "needs_examples")})
+
+
+@app.route("/api/appraisals/generate", methods=["POST"])
+def api_generate_appraisal():
+    """Save the signed appraisal. Only called after the employee has
+    confirmed in the app that it was reviewed with them."""
+    body = request.get_json(force=True)
+    if not body.get("acknowledged"):
+        return jsonify({"error": "The employee must confirm the appraisal was reviewed with them first."}), 400
+    hitch = data_store.get_hitch()
+    data = _clean_appraisal(body)
+    plan = _appraisal_plan(hitch, data, bool(body.get("examples_confirmed")))
+    if plan["problems"]:
+        return jsonify({"error": " ".join(plan["problems"])}), 400
+    template = os.path.join(data_store.TEMPLATES_ROOT, "EVAL", "DOUS Performance Appraisal rev 1.pdf")
+    try:
+        appraisal.fill_appraisal(template, plan["path"], {**data, "date": plan["date"]},
+                                 appraiser_sig=data_store.get_signature_path(data["appraiser_name"]),
+                                 employee_sig=data_store.get_signature_path(data["employee_name"]))
+    except PermissionError:
+        return jsonify({"error": f"Couldn't save '{plan['path']}' - it's probably open in another program."}), 409
+    except OSError as e:
+        return jsonify({"error": f"Couldn't save the appraisal: {e}"}), 400
+    data_store.delete_appraisal_draft(data["employee_name"])
+    data_store.save_appraisal_defaults({"location": data["location"], "appraiser_name": data["appraiser_name"],
+                                        "appraiser_title": data["appraiser_title"], "days": data["days"]})
+    return jsonify({"ok": True, "file": plan["path"]})
+
+
+@app.route("/api/appraisals/open", methods=["POST"])
+def api_open_appraisal():
+    """Open an appraisal just saved -- only Eval_*.pdf files inside this
+    hitch's timesheet folder."""
+    path = os.path.normpath(str(request.get_json(force=True).get("file", "")))
+    folder = os.path.normpath((data_store.get_hitch().get("ts_output_folder") or "").strip() or "?")
+    if (not os.path.basename(path).startswith("Eval_") or not path.lower().endswith(".pdf")
+            or not path.lower().startswith(folder.lower() + os.sep) or not os.path.exists(path)):
+        return jsonify({"error": "That appraisal file wasn't found."}), 404
+    os.startfile(path)  # noqa: S606 -- local app opening a file it saved
     return jsonify({"ok": True})
 
 

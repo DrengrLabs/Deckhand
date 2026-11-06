@@ -223,6 +223,9 @@ def remove_hitch(hitch_id):
         timesheets = os.path.join(DATA_DIR, "timesheets", hitch_id)
         if os.path.isdir(timesheets):
             shutil.move(timesheets, os.path.join(dest, "timesheets"))
+        drafts = os.path.join(DATA_DIR, "appraisal_drafts", hitch_id)
+        if os.path.isdir(drafts):
+            shutil.move(drafts, os.path.join(dest, "appraisal_drafts"))
         active = _read_json(ACTIVE_HITCH_FILE, {}).get("active")
         if active == hitch_id:
             active = next(h for h in existing if h != hitch_id)
@@ -426,6 +429,76 @@ def update_timesheet_week(week_ending, mutate_fn):
         mutate_fn(rec)
         _write_json(path, rec)
         return rec
+
+
+APPRAISAL_DRAFTS_DIR = os.path.join(DATA_DIR, "appraisal_drafts")
+
+
+def _appraisal_draft_path(employee):
+    import hashlib
+
+    hitch_id = get_active_hitch_id() or "default"
+    digest = hashlib.sha1(employee.encode("utf-8")).hexdigest()[:10]
+    return os.path.join(APPRAISAL_DRAFTS_DIR, hitch_id, f"{slugify(employee)}_{digest}.json")
+
+
+def get_appraisal_draft(employee):
+    """An appraisal in progress for one person on the active hitch, or None.
+    Appraisals are confidential: a draft only exists until the signed PDF
+    is saved, then it's deleted -- the PDF is the only record."""
+    return _read_json(_appraisal_draft_path(employee), None)
+
+
+def save_appraisal_draft(employee, draft):
+    with _lock:
+        _write_json(_appraisal_draft_path(employee), draft)
+
+
+def delete_appraisal_draft(employee):
+    path = _appraisal_draft_path(employee)
+    with _lock:
+        if os.path.exists(path):
+            os.remove(path)
+
+
+def _appraisal_defaults_path():
+    return os.path.join(APPRAISAL_DRAFTS_DIR, get_active_hitch_id() or "default", "_defaults.json")
+
+
+def get_appraisal_defaults():
+    """Last-used values that aren't confidential (e.g. the form's Location),
+    so each new appraisal on the hitch starts with them."""
+    return _read_json(_appraisal_defaults_path(), {})
+
+
+def save_appraisal_defaults(values):
+    with _lock:
+        _write_json(_appraisal_defaults_path(), values)
+
+
+APPRAISAL_PHRASES_FILE = os.path.join(DATA_DIR, "appraisal_phrases.json")
+
+
+def get_appraisal_phrases():
+    """The appraiser's own saved entries for the section 6 lines,
+    {"strengths": [...], "development": [...], "action_plan": [...]}."""
+    return _read_json(APPRAISAL_PHRASES_FILE, {})
+
+
+def save_appraisal_phrases(phrases):
+    with _lock:
+        _write_json(APPRAISAL_PHRASES_FILE, phrases)
+
+
+def list_appraisal_drafts():
+    """Names of people on the active hitch with an appraisal in progress."""
+    folder = os.path.join(APPRAISAL_DRAFTS_DIR, get_active_hitch_id() or "default")
+    names = []
+    for p in glob.glob(os.path.join(folder, "*.json")):
+        draft = _read_json(p, None)
+        if draft and draft.get("employee_name"):
+            names.append(draft["employee_name"])
+    return sorted(names)
 
 
 def get_day(date_str):

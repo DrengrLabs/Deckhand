@@ -59,7 +59,8 @@ into each TRA, retype the date, chase down signatures" routine. You set
 up each hitch/project once, then each day pick which TRAs are needed and
 get fully populated, dated, signed PDFs filed automatically.
 
-It also makes the weekly timesheets (see WEEKLY TIMESHEETS below).
+It also makes the weekly timesheets and performance appraisals (see
+WEEKLY TIMESHEETS and PERFORMANCE APPRAISALS below).
 
 Everything runs locally on this computer. No internet connection is
 needed to USE it day to day, and no data ever leaves this machine.
@@ -112,7 +113,8 @@ REQUIREMENTS ON THE COMPUTER YOU INSTALL THIS ON
   suitable Python is used as-is.)
 - Keep the whole "DOUS Deckhand" folder together. Inside it:
     INSTALL - run once.bat, UNINSTALL.bat, README.txt
-    templates\TRA and templates\TBT  - the blank TRA / TBT PDFs
+    templates\TRA, TBT, TS and EVAL - the blank TRA / TBT / timesheet /
+                                       appraisal PDFs
     app\                             - the program, its installers and
                                        its saved data
 
@@ -136,10 +138,11 @@ FIRST-TIME SETUP ON A NEW HITCH
    (e.g. ...\PRJ######\HSE). This is per-project, so update it at the
    start of each new hitch/project. REQUIRED: nothing is generated until
    it's set. Inside it, the app files every document automatically:
-       HSE\01 SIGNED TRA's\03 March\<TRA name> 03152026.pdf
-       HSE\02 SIGNED TBT's\03 March\<TBT name> 03152026.pdf
-   TRAs and TBTs go in their own folder, sorted into month folders
-   (01 January, 02 February ... 12 December) by the document's date.
+       HSE\01 SIGNED TRA's\2026\03 March\<TRA name> 03152026.pdf
+       HSE\02 SIGNED TBT's\2026\03 March\<TBT name> 03152026.pdf
+   TRAs and TBTs go in their own folder, sorted into a year folder and
+   then month folders (01 January, 02 February ... 12 December) by the
+   document's date.
    Any of these folders that don't exist yet are created automatically.
 5. Click "Save Hitch Setup".
 
@@ -196,11 +199,16 @@ DAILY USE
    "Capture" button right there -- draw it on the spot if needed.
 5. Click "Generate PDF". The filled, dated, signed PDF is filed in the
    project's HSE folder (01 SIGNED TRA's or 02 SIGNED TBT's, then the
-   month folder), named "<name> MMDDYYYY.pdf", and
+   year and month folders), named "<name> MMDDYYYY.pdf", and
    opens automatically in your PDF viewer so you can confirm it looks
    right. If generating fails for any reason (output folder unreachable,
    the file already open elsewhere, etc.) you'll get a clear message
    explaining why -- nothing fails silently.
+   The saved PDF has no leftover fill-in boxes: unused name, position and
+   signature rows print as plain blank rows (no empty highlighted fields
+   or "sign here" tags in Acrobat). If someone joins late, add them and
+   use "Edit / Regenerate" (or write them in by hand on a printout).
+   The TBT "Medic First Aider" box is the one field left fillable.
 6. If something new comes up later in the day (a LOTO, a Working at
    Heights task, etc.), just click "+ Add TRA"/"+ Add TBT" again --
    there's no limit to how many times you can do this per day.
@@ -255,6 +263,50 @@ and are left blank to fill in by hand if needed.
 
 A "View" button opens any timesheet already made for the week. TRAs/TBTs
 on the Today tab have the same "View" button.
+
+
+PERFORMANCE APPRAISALS
+------------------------
+The "Appraisals" tab fills in the DeepOcean Performance Appraisal form
+(rev 1), has the appraiser and the employee sign it, and saves it as a PDF.
+Appraisals are CONFIDENTIAL: once the signed PDF is saved, nothing about
+it is kept in Deckhand -- the PDF is the only record.
+
+Who it's for (section 3 of the form): Supervisors (appraised by the OCM
+or NOCM), Senior Pilot Techs (by a Supervisor) and Pilot Techs I/II (by a
+Supervisor or Senior Pilot Tech). OCMs and NOCMs are appraised by the
+Operations Manager outside this form. The grade comes from each person's
+Official Position on Hitch Setup.
+
+  1. Pick the employee. Their job title, the vessel (Location on Hitch
+     Setup) and the last Location used are filled in for you.
+  2. Enter the appraiser (pick from the crew or type a name, e.g. the OCM),
+     the number of days the appraisal covers, and the date. The appraiser
+     and days from the last appraisal saved on the hitch are filled in.
+  3. Score every subject 7 to 1, or N (not observed / not applicable).
+     5 = meets expectations. Hover a subject for its definition; open
+     "Scoring standard" for what each score means. Leadership starts at N
+     for Pilot Techs -- the form says they aren't appraised on it.
+     Scores of 1, 2, 6 or 7 need supporting examples or documents; the app
+     asks you to confirm you have them.
+     Every score starts at 5 (Overall too) -- change only what's different.
+  4. Fill in strengths, development areas, recommended actions, the action
+     plan, career progress and your comments. Each strengths / development /
+     action plan line has a list button: pick a common entry, or type your
+     own -- open the list again to save what you typed for next time (the x
+     next to one of your saved entries removes it).
+  5. Click "Review, sign & save". With the employee: they add their own
+     comments if they want, confirm the appraisal was reviewed with them,
+     and click "Reviewed - sign & save". Both saved signatures go on.
+
+Everything is kept as a draft while you work (it survives closing the
+app), until it's saved or you click "Discard draft".
+
+Files are named per the form: Eval_JS_AB_05-Nov-26.pdf (employee
+initials, appraiser initials, date) and saved with the timesheets:
+  7 - TIMESHEETS & MILEAGE REPORT\1 - DOUS PERSONNEL\John Smith\2026\
+A second appraisal with the same name gets "(2)" instead of replacing
+the first. Send the PDF to dousevals@deepoceangroup.com.
 
 
 HISTORY

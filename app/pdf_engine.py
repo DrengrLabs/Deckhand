@@ -427,13 +427,32 @@ def fill_template(
     # Filled text is already burned into the page by the flatten step, but
     # pypdf leaves the field widgets sitting on top -- so the finished
     # record stayed editable in Acrobat. Remove the widgets for every field
-    # we filled. Empty ones (blank attendee rows, unsigned boxes) are kept
-    # on purpose so a late arrival can still be added by hand.
-    filled = set(text_values)
+    # we filled, and also the unused participant / approver name, position
+    # and signature fields: left in, they show in Acrobat as empty
+    # highlighted boxes and "sign here" tags on every blank row. The table
+    # lines are part of the page, so blank rows still print for a hand
+    # entry (or the record is regenerated after adding the person). Any
+    # other field Deckhand doesn't fill (e.g. the TBT "Medic First Aider")
+    # stays fillable.
+    remove = set(text_values)
+    for row in info["crew_rows"]:
+        remove.update(f for f in (row["name_field"], row["position_field"], row["sig_field"]) if f)
+    remove.update(a["sig_field"] for a in info["approver_sig_fields"] if a["sig_field"])
+    remove.update(f for f in (info["approver_name_field"], info["approver_position_field"]) if f)
     for page in doc:
         for widget in list(page.widgets() or []):
-            if widget.field_name in filled:
+            if widget.field_name in remove:
                 page.delete_widget(widget)
+    if not any(page.first_widget for page in doc):
+        # No fields left: drop the form dictionary too, so Acrobat doesn't
+        # show its "this document contains interactive form fields" bar.
+        catalog = doc.pdf_catalog()
+        source = doc.xref_object(catalog, compressed=True)
+        stripped = re.sub(r"/AcroForm\s*\d+\s+\d+\s+R", "", source, count=1)
+        if stripped != source:
+            doc.update_object(catalog, stripped)
+        else:   # inline form dictionary: a null entry means the same as none
+            doc.xref_set_key(catalog, "AcroForm", "null")
 
     doc.save(output_path, garbage=4, deflate=True)
     doc.close()
