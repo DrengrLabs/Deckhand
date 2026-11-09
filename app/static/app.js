@@ -363,13 +363,44 @@ async function getSignaturesIndex() {
   return api("/api/signatures");
 }
 
+// Handwriting fonts for a typed signature (the back-up when the Topaz pad
+// isn't working -- mouse-drawn ones look poor). Segoe Script and Ink Free
+// come with Windows; the rest come with Office, so only the ones this
+// computer actually has are offered.
+const SIG_FONTS = ["Segoe Script", "Brush Script MT", "Lucida Handwriting", "Freestyle Script",
+  "Edwardian Script ITC", "Bradley Hand ITC", "Mistral", "Ink Free"];
+let sigFontsAvailable = null;
+
+function fontInstalled(name) {
+  // A missing font falls back to the generic family, so its text measures
+  // exactly the same as the generic family's.
+  const ctx = document.createElement("canvas").getContext("2d");
+  const sample = "Signature Wjq 0123";
+  return ["monospace", "serif", "sans-serif"].some((base) => {
+    ctx.font = `40px ${base}`;
+    const plain = ctx.measureText(sample).width;
+    ctx.font = `40px "${name}", ${base}`;
+    return ctx.measureText(sample).width !== plain;
+  });
+}
+
+function signatureFonts() {
+  if (!sigFontsAvailable) sigFontsAvailable = SIG_FONTS.filter(fontInstalled);
+  return sigFontsAvailable.length ? sigFontsAvailable : ["cursive"];
+}
+
 function openSignatureModal(personName, onSaved) {
   $("#modalBox").innerHTML = `
     <h3>Signature &mdash; ${escapeAttr(personName)}</h3>
     <p class="hint" id="sigHint">Draw in the box with the mouse, touchscreen or stylus.</p>
     <canvas id="sigCanvas" width="560" height="200"></canvas>
+    <div id="sigTypeBox" class="sig-type" hidden>
+      <label>Name to sign <input id="sigTypeText" value="${escapeAttr(personName)}" autocomplete="off"></label>
+      <div id="sigFonts" class="sig-fonts"></div>
+    </div>
     <div class="row">
       <button type="button" id="sigPad" hidden>Sign on Topaz Pad</button>
+      <button type="button" id="sigType" class="secondary">Type it</button>
       <button type="button" id="sigClear" class="secondary">Clear</button>
       <button type="button" id="sigSave">Save Signature</button>
       <button type="button" id="sigCancel" class="secondary">Cancel</button>
@@ -444,6 +475,54 @@ function openSignatureModal(personName, onSaved) {
   ["pointerup", "pointerleave", "pointercancel"].forEach((ev) =>
     canvas.addEventListener(ev, () => (drawing = false))
   );
+
+  // ---- typed signature ----
+  let typedFont = null;
+  function drawTyped() {
+    const text = $("#sigTypeText").value.trim();
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    drewSomething = false;
+    if (!text || !typedFont) return;
+    let size = 96;
+    const family = typedFont === "cursive" ? "cursive" : `"${typedFont}", cursive`;
+    ctx.font = `${size}px ${family}`;
+    while (size > 24 && ctx.measureText(text).width > canvas.width - 40) {
+      size -= 4;
+      ctx.font = `${size}px ${family}`;
+    }
+    ctx.save();
+    ctx.fillStyle = "#0b1f6b";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+    ctx.restore();
+    drewSomething = true;
+  }
+  function renderFontChoices() {
+    const text = $("#sigTypeText").value.trim() || personName;
+    $("#sigFonts").innerHTML = signatureFonts().map((f) => `
+      <button type="button" class="sig-font${f === typedFont ? " on" : ""}" data-font="${escapeAttr(f)}"
+        style="font-family: ${f === "cursive" ? "cursive" : `'${escapeAttr(f)}', cursive`}" title="${escapeAttr(f)}">${escapeAttr(text)}</button>`).join("");
+    $$("#sigFonts .sig-font").forEach((b) => b.addEventListener("click", () => {
+      typedFont = b.dataset.font;
+      $$("#sigFonts .sig-font").forEach((x) => x.classList.toggle("on", x === b));
+      drawTyped();
+    }));
+  }
+  $("#sigType").addEventListener("click", async () => {
+    await stopPad();
+    const padBtn = $("#sigPad");
+    padBtn.disabled = false;
+    padBtn.textContent = "Sign on Topaz Pad";
+    $("#sigTypeBox").hidden = false;
+    $("#sigType").hidden = true;
+    $("#sigHint").textContent = "Check the name, then pick the style you want. It's saved like any other signature.";
+    typedFont = typedFont || signatureFonts()[0];
+    renderFontChoices();
+    drawTyped();
+    $("#sigTypeText").focus();
+  });
+  $("#sigTypeText").addEventListener("input", () => { renderFontChoices(); drawTyped(); });
 
   $("#sigClear").addEventListener("click", async () => {
     ctx.clearRect(0, 0, canvas.width, canvas.height);

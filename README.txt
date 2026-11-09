@@ -167,6 +167,13 @@ screen as you sign), then click "Save Signature". Without SigWeb or the
 pad, the button doesn't appear and you can still sign with the mouse,
 touchscreen or stylus.
 
+If the pad stops working (or a mouse signature looks too rough), click
+"Type it" in the signature window: check the name, pick one of the
+handwriting styles shown, and click "Save Signature". It's saved and used
+exactly like a drawn signature. The styles offered are the handwriting
+fonts on that computer (Segoe Script and Ink Free come with Windows;
+Brush Script, Lucida Handwriting and others come with Office).
+
 SigWeb is installed automatically by "INSTALL - run once.bat" (from the
 DOUS Deckhand\app\installers folder) -- it needs admin permission once. The
 installer also writes the pad settings into C:\Windows\SigPlus.ini

@@ -151,6 +151,12 @@ button:disabled { opacity: 0.5; cursor: not-allowed; filter: none; }
 }
 .modal-box h3 { margin-top: 0; }
 #sigCanvas { border: 1px solid var(--border); border-radius: 4px; touch-action: none; background: var(--paper); max-width: 100%; display: block; }
+.sig-type { margin: 10px 0 4px; max-width: 560px; }
+.sig-fonts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.sig-font { background: var(--paper); color: #0b1f6b; font-size: 24px; font-weight: normal; padding: 4px 14px;
+  border: 2px solid transparent; border-radius: 4px; line-height: 1.4; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sig-font:hover { border-color: var(--secondary); }
+.sig-font.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .tra-pick-list { max-height: 300px; overflow: auto; border: 1px solid var(--border); border-radius: 4px; background: var(--field); }
 .tra-pick-item { padding: 8px 10px; cursor: pointer; border-bottom: 1px solid var(--border); }
 .tra-pick-item:hover { background: rgba(255, 255, 255, 0.08); }
